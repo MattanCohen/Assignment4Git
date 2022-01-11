@@ -23,7 +23,8 @@ class Order:
         self.hat = hat
 
 class Stat:
-    def __init__(self, topping, supplier, location):
+    def __init__(self, id, topping, supplier, location):
+        self.id = id
         self.topping = topping
         self.supplier = supplier
         self.location = location
@@ -62,21 +63,30 @@ class _Hats:
 
     def get_available_supplier(self, topping):
         c = self._conn.cursor()
-
+       # print ("topping: ?",[topping])
         # get a hat_id and it's supplier_id if the hat is topping = topping and quantity > 0
         c.execute("""
-            SELECT id, supplier FROM hats WHERE topping = ? AND quantity > 0
+            SELECT id, supplier FROM hats  WHERE topping = ? AND quantity > 0 GROUP BY supplier ORDER BY supplier
         """, [topping])
-        [id,supplier_id] = c.fetchone
 
+        pair = c.fetchone()
+       # print ("c fetched:",pair)
         # check if exists a hat that conforms the request
-        if id == None or supplier_id == None:
+        if pair == None:
             return -1
+
+        id = pair[0]
+        supplier_id = pair[1]
+
 
         # update hats at id to have 1 less quantity
         c.execute("""
             UPDATE hats SET quantity = ? WHERE  id = ?
-        """, [_Hats.find(id).quantity-1 , id])
+        """, [_Hats.find(self,id).quantity-1 , id])
+
+        c.execute("""
+            DELETE FROM hats WHERE id = ? AND quantity = 0
+        """,[id])
 
         return supplier_id
 
@@ -121,22 +131,23 @@ class _Stats:
         self._conn = conn
 
     def insert(self, stat):
+  #      print("insert",stat.id,stat.topping,stat.supplier,stat.location,"to stats")
         self._conn.execute("""
-            INSERT INTO stats (topping, supplier, location) VALUES (?, ?, ?)
-        """, [stat.topping, stat.supplier, stat.location])
+            INSERT INTO stats (id, topping, supplier, location) VALUES (?, ?, ?, ?)
+        """, [stat.id, stat.topping, stat.supplier, stat.location])
 
     def get_all(self):
         c = self._conn.cursor()
         all = c.execute("""
-            SELECT stat.topping, stat.supplier, stat.location FROM stats
+            SELECT id, topping, supplier, location FROM stats
         """).fetchall()
         return [Stat(*row) for row in all]
 
 
 # The Repository
 class _Repository:
-    def __init__(self):
-        self._conn = sqlite3.connect('grades.db')
+    def __init__(self, db_path):
+        self._conn = sqlite3.connect(db_path)
         self.hats = _Hats(self._conn)
         self.suppliers = _Suppliers(self._conn)
         self.orders = _Orders(self._conn)
@@ -147,7 +158,13 @@ class _Repository:
         self._conn.close()
 
     def create_tables(self):
-        self._conn.executescript("""
+        self._conn.execute("""
+        CREATE TABLE suppliers (
+            id                 INT     PRIMARY KEY,
+            name     TEXT    NOT NULL
+        )""")
+
+        self._conn.execute("""
         CREATE TABLE hats (
             id      INT         PRIMARY KEY,
             topping    TEXT        NOT NULL,
@@ -155,41 +172,35 @@ class _Repository:
             quantity INT        NOT NULL,
             
             FOREIGN KEY (supplier)      REFERENCES suppliers(id)
-        );
+        )""")
 
-        CREATE TABLE suppliers (
-            id                 INT     PRIMARY KEY,
-            name     TEXT    NOT NULL
-        );
+        self._conn.execute("""
+              CREATE TABLE orders (
+                  id      INT         PRIMARY KEY,
+                  location    TEXT        NOT NULL,
+                  hat INT        NOT NULL,
 
-        CREATE TABLE orders (
-            id      INT     PRIMARY KEY ,
-            location  TEXT     NOT NULL,
-            hat           INT     NOT NULL,
+                  FOREIGN KEY (hat)      REFERENCES hats(id)
+              )""")
 
-            FOREIGN KEY(hat)     REFERENCES hats(id),
-        );
+        self._conn.execute("""
+              CREATE TABLE stats (
+                  id      INT         PRIMARY KEY,
+                  topping    TEXT        NOT NULL,
+                  supplier TEXT        NOT NULL,
+                  location TEXT NOT NULL
+
+              )""")
         
-        CREATE TABLE stats (
-            topping      TEXT     NOT NULL ,
-            supplier  TEXT     NOT NULL,
-            location           TEXT     NOT NULL,
-            
-            
-            PRIMARY  KEY (topping,supplier,location)
-        );
-    """)
 
     def get_available_supplier(self, topping_name):
         supplier_id = self.hats.get_available_supplier(topping_name)
         if supplier_id == -1 :
             return None
         supplier_name = self.suppliers.find(supplier_id).name
-        self.hats.updateinventory()
+     #   self.hats.updateinventory()
         return supplier_name
 
-# the repository singleton
-repo = _Repository()
 
 
 # Application logic
@@ -202,27 +213,42 @@ import os
 
 # main: read the config and then the orders
 import sys
+import os
 
 def main (args):
-    # initiate repository
-    repo.__init__()
+
+    # restart db
+    os.remove(args[4])
+
+    # args: mainorsmth [config.txt] [orders.txt] [output.txt] [database.db]
+    # C:\Caze Mattan\University\2nd year\3rd semester\courses\SPL\Project4\207382581-204867568\config.txt
+    config_txt = args[1]
+    orders_txt = args[2]
+    output_txt = args[3]
+    database_db = args[4]
+
+
+    # initiate the repository singleton with said db
+    repo = _Repository(database_db)
+
+#    repo.__init__(database_db)
     # create tables
     repo.create_tables()
 
-    # args: mainorsmth [config.txt] [orders.txt] [output.txt] [database.db]
-    configtext = args[1]
-    orderdstxt = args[2]
-    outputtxt = args[3]
-    # how to use database db?
-    databasedb = args[4]
     # lines to check if file exists:     import os; os.path.isfile(filename);
 
     # configurate tables
     # save config file lines in array
+    bad_lines = []
     lines = []
-    with open(configtext) as inputfile:
+    with open(config_txt) as inputfile:
         for line in inputfile:
             lines.append(line)
+
+    for i in range(len(lines)-1):
+        lines[i] = lines[i][:len(lines[i])-1]
+
+
     # first line is num of hats and num of suppliers seperated with ','
     nums = lines[0].split(",")
     num_of_hats = int(nums[0])
@@ -236,6 +262,8 @@ def main (args):
         hat_id = int(hat_info[0])
         topping = hat_info[1]
         supplier_id = int(hat_info[2])
+        hat_info[3] = hat_info[3][:2]
+#        print ("quantity: ",hat_info[3],".")
         quantity = int(hat_info[3])
         hat = Hat(hat_id,topping,supplier_id,quantity)
         repo.hats.insert(hat)
@@ -253,26 +281,36 @@ def main (args):
     # execute orders
     # make orders id
     order_id = 1
-    with open(orderdstxt) as inputfile:
+    order_lines = []
+    with open(orders_txt) as inputfile:
         for line in inputfile:
-            # create order from line
-            order_location = line.split(",")[0]
-            order_topping = line.split(",")[1]
-            order = Order(order_id,order_location, order_topping)
-            # try to get a supplier name and update quantity (execute order for topping)
-            supplier_name = repo.get_available_supplier(order_topping)
-            # if got a supplier then order was executed
-            if (supplier_name != None):
-                # add it's order to repository's orders db
-                repo.orders.insert(order)
-                order_id = order_id + 1
-                # add stat of executed order to stats
-                stat = Stat(order_topping,supplier_name, order_location)
-                repo.stats.insert(stat)
+            order_lines.append(line)
+
+    for i in range(len(order_lines) - 1):
+        order_lines[i] = order_lines[i][:len(order_lines[i]) - 1]
+
+    for line in order_lines:
+        # create order from line
+        order_location = line.split(",")[0]
+        order_topping = line.split(",")[1]
+        order = Order(order_id,order_location, order_topping)
+        # try to get a supplier name and update quantity (execute order for topping)
+        supplier_name = repo.get_available_supplier(order_topping)
+        # if got a supplier then order was executed
+        if (supplier_name != None):
+            # add it's order to repository's orders db
+            repo.orders.insert(order)
+            order_id = order_id + 1
+            # add stat of executed order to stats
+         #   print ("order topping",order_topping,"supplier name",supplier_name,"order location",order_location)
+            stat = Stat(order_id, order_topping, supplier_name, order_location)
+            repo.stats.insert(stat)
+
     summary = repo.stats.get_all()
-    with open(outputtxt) as outputfile:
+    os.remove(output_txt)
+    with open(output_txt, "x") as outputfile:
         for stat in summary:
-            summary_stat = stat.topping + "," + stat.supplier + "," + stat.location
+            summary_stat = stat.topping + "," + stat.supplier + "," + stat.location + '\n'
             outputfile.write(summary_stat)
 
     #close repository
