@@ -88,7 +88,7 @@ class _Hats:
             DELETE FROM hats WHERE id = ? AND quantity = 0
         """,[id])
 
-        return supplier_id
+        return [id,supplier_id]
 
 
 class _Suppliers:
@@ -161,13 +161,13 @@ class _Repository:
         self._conn.execute("""
         CREATE TABLE suppliers (
             id                 INT     PRIMARY KEY,
-            name     TEXT    NOT NULL
+            name     VARCHAR    NOT NULL
         )""")
 
         self._conn.execute("""
         CREATE TABLE hats (
             id      INT         PRIMARY KEY,
-            topping    TEXT        NOT NULL,
+            topping    VARCHAR        NOT NULL,
             supplier INT        NOT NULL,
             quantity INT        NOT NULL,
             
@@ -177,7 +177,7 @@ class _Repository:
         self._conn.execute("""
               CREATE TABLE orders (
                   id      INT         PRIMARY KEY,
-                  location    TEXT        NOT NULL,
+                  location    VARCHAR        NOT NULL,
                   hat INT        NOT NULL,
 
                   FOREIGN KEY (hat)      REFERENCES hats(id)
@@ -186,20 +186,20 @@ class _Repository:
         self._conn.execute("""
               CREATE TABLE stats (
                   id      INT         PRIMARY KEY,
-                  topping    TEXT        NOT NULL,
-                  supplier TEXT        NOT NULL,
-                  location TEXT NOT NULL
+                  topping    VARCHAR        NOT NULL,
+                  supplier VARCHAR        NOT NULL,
+                  location VARCHAR NOT NULL
 
               )""")
         
 
     def get_available_supplier(self, topping_name):
-        supplier_id = self.hats.get_available_supplier(topping_name)
-        if supplier_id == -1 :
+        [hat_id,supplier_id] = self.hats.get_available_supplier(topping_name)
+        if [hat_id,supplier_id] == [-1,-1] :
             return None
         supplier_name = self.suppliers.find(supplier_id).name
      #   self.hats.updateinventory()
-        return supplier_name
+        return [hat_id,supplier_name]
 
 
 
@@ -293,16 +293,18 @@ def main (args):
         # create order from line
         order_location = line.split(",")[0]
         order_topping = line.split(",")[1]
-        order = Order(order_id,order_location, order_topping)
         # try to get a supplier name and update quantity (execute order for topping)
-        supplier_name = repo.get_available_supplier(order_topping)
+        pair = repo.get_available_supplier(order_topping)
+        hat_id = pair[0]
+        supplier_name = pair[1]
         # if got a supplier then order was executed
         if (supplier_name != None):
+            order = Order(order_id,order_location, hat_id)
             # add it's order to repository's orders db
             repo.orders.insert(order)
             order_id = order_id + 1
             # add stat of executed order to stats
-         #   print ("order topping",order_topping,"supplier name",supplier_name,"order location",order_location)
+            #   print ("order topping",order_topping,"supplier name",supplier_name,"order location",order_location)
             stat = Stat(order_id, order_topping, supplier_name, order_location)
             repo.stats.insert(stat)
 
@@ -312,10 +314,8 @@ def main (args):
         for stat in summary:
             summary_stat = stat.topping + "," + stat.supplier + "," + stat.location + '\n'
             outputfile.write(summary_stat)
-
     #close repository
     repo._close()
-
 
 if __name__ == '__main__':
     main(sys.argv)
